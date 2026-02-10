@@ -331,6 +331,54 @@ class TestRuntimeLogger:
         assert data["input_tokens"] == 100
 
     @pytest.mark.asyncio
+    async def test_log_step_multiple_tool_calls(self, tmp_path: Path):
+        """A single step can contain multiple tool calls, including failures."""
+        store = RuntimeLogStore(tmp_path / "logs")
+        rt_logger = RuntimeLogger(store=store, agent_id="test-agent")
+        run_id = rt_logger.start_run("goal-1")
+
+        rt_logger.log_step(
+            node_id="node-1",
+            node_type="event_loop",
+            step_index=0,
+            tool_calls=[
+                {
+                    "tool_use_id": "tc_1",
+                    "tool_name": "web_search",
+                    "tool_input": {"query": "hive"},
+                    "content": "found results",
+                    "is_error": False,
+                },
+                {
+                    "tool_use_id": "tc_2",
+                    "tool_name": "write_file",
+                    "tool_input": {"path": "test.txt", "content": "hello"},
+                    "content": "permission denied",
+                    "is_error": True,
+                },
+            ],
+            llm_text="Running multiple tools...",
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        loaded = await store.load_tool_logs(run_id)
+        assert loaded is not None
+        assert len(loaded.steps) == 1
+
+        step = loaded.steps[0]
+        assert len(step.tool_calls) == 2
+
+        assert step.tool_calls[0].tool_name == "web_search"
+        assert step.tool_calls[0].is_error is False
+        assert "found" in step.tool_calls[0].result.lower()
+
+        assert step.tool_calls[1].tool_name == "write_file"
+        assert step.tool_calls[1].is_error is True
+        assert "permission denied" in step.tool_calls[1].result.lower()
+
+
+    @pytest.mark.asyncio
     async def test_log_node_complete_writes_to_disk_immediately(self, tmp_path: Path):
         store = RuntimeLogStore(tmp_path / "logs")
         rl = RuntimeLogger(store=store, agent_id="test-agent")
